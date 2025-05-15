@@ -48,21 +48,28 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
  * Met le socket en état d'acceptation de connexions
  * Retourne 0 si succès, -1 si erreur
  */
-int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr) // pas implémenté en verison 1
+int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr) // appelé par le programme puits
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
+    if(sockt.fd == socket){
 
-    return -1;
-}*
+        sockt.remote_addr = *addr;
+    }
+
+    return 0;
+}
+
 /*
  * Permet de réclamer l’établissement d’une connexion
  * Retourne 0 si la connexion est établie, et -1 en cas d’échec
  */
-int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // pas implémenté en verison 1
+int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le programme source
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
 
-    return -1;
+    sockt.remote_addr = addr; // faut quand même que 
+
+    return 0; // pour tester v1 on return 0 
 }
 
 /*
@@ -73,14 +80,14 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 
-    if(sockt.fd == socket){
+    if(sockt.fd == mic_sock){
 
         mic_tcp_pdu PDU;
         PDU.payload.data = mesg;        // buffer dans lequel est stockée les données utiles
         PDU.payload.size = mesg_size;   // taille du message utile
 
         PDU.header.dest_port = sockt.remote_addr.port; // adresse de destination
-        PDU.header.source_port = sockt.local_addr.port; // adresse source
+        PDU.header.source_port = 9001; // adresse source
 
         int bytes_sent = IP_send(PDU,sockt.remote_addr.ip_addr);         // traitement du pdu via le protocole inférieure
 
@@ -132,7 +139,7 @@ int mic_tcp_close (int socket)
 
     {
         sockt.fd = -1;
-        sockt.state;
+        sockt.state = IDLE;
         return 0;
     }
     return -1;

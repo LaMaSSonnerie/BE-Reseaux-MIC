@@ -18,7 +18,7 @@
 /*
  * Etats du protocole (les noms des états sont donnés à titre indicatif
  * et peuvent être modifiés)
- */ip_addr
+ */
 typedef enum protocol_state
 {
     IDLE, CLOSED, SYN_SENT, SYN_RECEIVED, ESTABLISHED, CLOSING
