@@ -1,0 +1,13 @@
+{
+    "files.associations": {
+        "functional": "c",
+        "random": "c",
+        "fstream": "c",
+        "istream": "c",
+        "mutex": "c",
+        "ostream": "c",
+        "sstream": "c",
+        "stop_token": "c",
+        "streambuf": "c"
+    }
+}

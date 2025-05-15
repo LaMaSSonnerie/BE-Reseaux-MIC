@@ -39,7 +39,7 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 
     if(sockt.fd == socket){  // pareil je suis censé faire cette vérification sur un tableau 
 
-        socket.local_addr = addr;
+        sockt.local_addr = addr;
         return 0;
     }
 
@@ -87,7 +87,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         PDU.header.dest_port = sockt.remote_addr.port;
         PDU.header.source_port = sockt.local_addr.port;
 
-        int bytes_sent = IP_send(PDU,mic_sock);
+        int bytes_sent = IP_send(PDU,sockt.remote_addr.ip_addr);
 
         return bytes_sent;
 
@@ -104,8 +104,24 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
  */
 int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
 {
-    printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-    return -1;
+    printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__);printf("\n");
+    
+    if(sockt.fd == socket)
+
+    {
+
+        mic_tcp_payload payload;
+        payload.data = mesg;
+        payload.size = max_mesg_size;
+
+        int effective_data_size = app_buffer_get(payload);
+
+        return effective_data_size;
+
+    }
+    
+    else
+        return -1;
 }
 
 /*
@@ -116,6 +132,13 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
 int mic_tcp_close (int socket)
 {
     printf("[MIC-TCP] Appel de la fonction :  "); printf(__FUNCTION__); printf("\n");
+    if(sockt.fd == socket)
+
+    {
+        sockt.fd = -1;
+        sockt.state;
+        return 0;
+    }
     return -1;
 }
 
