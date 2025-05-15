@@ -95,6 +95,7 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
  * Permet de réclamer l’envoi d’une donnée applicative
  * Retourne la taille des données envoyées, et -1 en cas d'erreur
  */
+ 
 int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
