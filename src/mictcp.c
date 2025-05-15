@@ -1,7 +1,7 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
 
-char* buffer[128];
+
 mic_tcp_sock sockt; // je suis supposé créer un tableau de socket parce que par exemple, les fonctions identifie le socket par leurs FD. c'est donc pas logique de ne créer que un socket global
 
 /*
@@ -24,9 +24,6 @@ int mic_tcp_socket(start_mode sm)
 
     else
         return result;
-
-
-   
 }
 
 /*
@@ -39,7 +36,7 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 
     if(sockt.fd == socket){  // pareil je suis censé faire cette vérification sur un tableau 
 
-        socket.local_addr = addr;
+        sockt.local_addr = addr;
         return 0;
     }
 
@@ -51,19 +48,17 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
  * Met le socket en état d'acceptation de connexions
  * Retourne 0 si succès, -1 si erreur
  */
-int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
+int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr) // pas implémenté en verison 1
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
 
-
     return -1;
-}
-
+}*
 /*
  * Permet de réclamer l’établissement d’une connexion
  * Retourne 0 si la connexion est établie, et -1 en cas d’échec
  */
-int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
+int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // pas implémenté en verison 1
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
 
@@ -81,17 +76,18 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
     if(sockt.fd == socket){
 
         mic_tcp_pdu PDU;
-        PDU.payload.data = mesg;
-        PDU.payload.size = mesg_size;
+        PDU.payload.data = mesg;        // buffer dans lequel est stockée les données utiles
+        PDU.payload.size = mesg_size;   // taille du message utile
 
-        PDU.header.dest_port = sockt.remote_addr.port;
-        PDU.header.source_port = sockt.local_addr.port;
+        PDU.header.dest_port = sockt.remote_addr.port; // adresse de destination
+        PDU.header.source_port = sockt.local_addr.port; // adresse source
 
-        int bytes_sent = IP_send(PDU,mic_sock);
+        int bytes_sent = IP_send(PDU,sockt.remote_addr.ip_addr);         // traitement du pdu via le protocole inférieure
 
         return bytes_sent;
 
     }
+
     else
         return -1;
 }
@@ -125,9 +121,9 @@ int mic_tcp_close (int socket)
  * le buffer de réception du socket. Cette fonction utilise la fonction
  * app_buffer_put().
  */
-void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_ip_addr remote_addr)
+void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_ip_addr remote_addr) // on vérifie pas que le remote_addr est associé à un port d'écoute, on est en version 1
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 
-    
+    app_buffer_put(pdu.payload);
 }
