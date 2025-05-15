@@ -1,9 +1,12 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
 
+#define MAX_SOCKETS_NUMBER 16 
 
-mic_tcp_sock sockt; // je suis supposé créer un tableau de socket parce que par exemple, les fonctions identifie le socket par leurs FD. c'est donc pas logique de ne créer que un socket global
+// au lieu de se contenter de un seul socket, on crée un tableau de socket pour pouvoir en gérer plusieurs
 
+int sock_nb = 0;
+mic_tcp_sock sockets[MAX_SOCKETS_NUMBER]; 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
@@ -17,9 +20,16 @@ int mic_tcp_socket(start_mode sm)
 
     if(result != -1){ // ça ne sert à rien de créer le socket si on a pas reussi a initialiser les outils pour la programmation asynchrone
 
-        sockt.fd = 1;
-        sockt.state = IDLE;    // etat de depart
-        return sockt.fd;
+        if(sock_nb >= MAX_SOCKETS_NUMBER){
+
+            sockets[sock_nb].fd = sock_nb;
+            sockets[sock_nb].state = IDLE;    // etat de depart
+            sock_nb++;
+            return sockets[sock_nb].fd;
+
+        }
+        else
+            return -1;
     }
 
     else
@@ -34,9 +44,9 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
 
-    if(sockt.fd == socket){  // pareil je suis censé faire cette vérification sur un tableau 
+    if(0 <= socket && socket < MAX_SOCKETS_NUMBER){  // pareil je suis censé faire cette vérification sur un tableau 
 
-        sockt.local_addr = addr;
+        sockets[socket] .local_addr = addr; // association de l'adresse local et du socket
         return 0;
     }
 
@@ -51,12 +61,15 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr) // appelé par le programme puits
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
-    if(sockt.fd == socket){
+    if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
-        sockt.remote_addr = *addr;
+        sockets[socket].remote_addr = *addr;  //
+        return 0;
     }
+    else
+        return -1;
 
-    return 0;
+    
 }
 
 /*
@@ -67,9 +80,15 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
 
-    sockt.remote_addr = addr; // faut quand même que 
+    if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
-    return 0; // pour tester v1 on return 0 
+        sockets[socket].remote_addr = addr; // faut quand même que l'on sache à qui on envoie la demande de connexion. On ne connaît pas l'adresse distante lors de la creation du socket
+        return 0;
+
+    } 
+
+    else
+        return -1;
 }
 
 /*
@@ -80,21 +99,20 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 
-    if(sockt.fd == mic_sock){
+    if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
         mic_tcp_pdu PDU;
         PDU.payload.data = mesg;        // buffer dans lequel est stockée les données utiles
         PDU.payload.size = mesg_size;   // taille du message utile
 
-        PDU.header.dest_port = sockt.remote_addr.port; // adresse de destination
-        PDU.header.source_port = 9001; // adresse source
+        PDU.header.dest_port = sockets[mic_sock].remote_addr.port; // port de destination
+        PDU.header.source_port = sockets[mic_sock].local_addr.port; // port source
 
-        int bytes_sent = IP_send(PDU,sockt.remote_addr.ip_addr);         // traitement du pdu via le protocole inférieure
+        int bytes_sent = IP_send(PDU,sockets[mic_sock].remote_addr.ip_addr);         // traitement du pdu via le protocole inférieure
 
         return bytes_sent;
 
     }
-
     else
         return -1;
 }
@@ -109,7 +127,7 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__);printf("\n");
     
-    if(sockt.fd == socket)
+    if(0 <= socket && socket < MAX_SOCKETS_NUMBER)
 
     {
 
@@ -132,14 +150,14 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
  * Engendre la fermeture de la connexion suivant le modèle de TCP.
  * Retourne 0 si tout se passe bien et -1 en cas d'erreur
  */
-int mic_tcp_close (int socket)
+int mic_tcp_close(int socket)
 {
     printf("[MIC-TCP] Appel de la fonction :  "); printf(__FUNCTION__); printf("\n");
-    if(sockt.fd == socket)
+    if(0 <= socket && socket < MAX_SOCKETS_NUMBER)
 
     {
-        sockt.fd = -1;
-        sockt.state = IDLE;
+        sockets[socket].fd = -1;
+        sockets[socket].state = IDLE;
         return 0;
     }
     return -1;
