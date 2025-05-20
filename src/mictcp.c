@@ -25,12 +25,12 @@ int mic_tcp_socket(start_mode sm)
 
     if(result != -1){ // ça ne sert à rien de créer le socket si on a pas reussi a initialiser les outils pour la programmation asynchrone
 
-        if(sock_nb >= MAX_SOCKETS_NUMBER){
+        if(sock_nb < MAX_SOCKETS_NUMBER){
 
             sockets[sock_nb].fd = sock_nb;
             sockets[sock_nb].state = IDLE;    // etat de depart
             sock_nb++;
-            return sockets[sock_nb].fd;
+            return sockets[sock_nb-1].fd;
 
         }
         else
@@ -51,7 +51,7 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){  // pareil je suis censé faire cette vérification sur un tableau 
 
-        sockets[socket] .local_addr = addr; // association de l'adresse local et du socket
+        sockets[socket].local_addr = addr; // association de l'adresse local et du socket
         return 0;
     }
 
@@ -105,7 +105,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 
-    if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
+    if(0 <= mic_sock && mic_sock < MAX_SOCKETS_NUMBER){
 
         mic_tcp_pdu PDU;
         mic_tcp_pdu Recv_PDU;
@@ -127,7 +127,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         PDU.header.source_port = sockets[mic_sock].local_addr.port; // port source
 
         
-
+        puts("BOUCLE\n");
         while(!ack_recv && nb_retransmit < MAX_RETRY){
 
             // SEND OR RETRY
@@ -135,23 +135,30 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
             bytes_sent = IP_send(PDU,sockets[mic_sock].remote_addr.ip_addr);
 
             // WAIT FOR ACK
-
+            puts("WAIT FOR ACK\n");
             while(result == -1){
 
                 // le Recv_PDU contient l'acquittement et la gestion de timer est géré par IP_recv
                 result = IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, ms_timer);
+                perror("Erreur:");
             }
+            puts("END WFA\n");
 
             // on vérifie que l'on reçois le bon num d'acquittement et on met ack_recv à true
 
-            if(result != -1 && Recv_PDU.header.ack && Recv_PDU.header.ack_num == n_seq)
+            if(result != -1 && Recv_PDU.header.ack && Recv_PDU.header.ack_num == n_seq){
                 ack_recv = 1;
+                puts("ACK\n");
+            }
 
             // s'il agissait pas d'un ack ou que le num est le mauvais, on se prépare à la retransmission
-            else
+            else{
                 nb_retransmit++;
-
+                result = -1;
+                puts("PB\n");
+            }
         }
+        puts("END\n");
 
         if(ack_recv){
 
@@ -159,6 +166,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 
             n_seq = (n_seq+1)%2;
             return bytes_sent;
+
         }
         else 
             return -1;
@@ -229,6 +237,7 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 
     mic_tcp_pdu pdu_ack;
     pdu_ack.header.ack = 1;
+
     /*Si on recu bien le pdu attendu on le met dans le buffer et on envoie un ack*/
     if(pdu.header.seq_num == expected_seq)
     {
@@ -245,7 +254,5 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
     
 
     //SEND ACK
-        IP_send(pdu_ack,remote_addr);
-
-    
+    IP_send(pdu_ack,remote_addr);
 }
