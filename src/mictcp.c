@@ -136,7 +136,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
             while(result == -1){
 
                 // le Recv_PDU contient l'acquittement et la gestion de timer est géré par IP_recv
-                result = int IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, ms_timer);
+                result = IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, ms_timer);
             }
 
             // on vérifie que l'on reçois le bon num d'acquittement et on met ack_recv à true
