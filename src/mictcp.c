@@ -2,14 +2,16 @@
 #include <api/mictcp_core.h>
 
 #define MAX_SOCKETS_NUMBER 16 
+#define MAX_RETRY 5
 
 // au lieu de se contenter de un seul socket, on crée un tableau de socket pour pouvoir en gérer plusieurs
 
 int sock_nb = 0;
-mic_tcp_sock sockets[MAX_SOCKETS_NUMBER]; 
+mic_tcp_sock sockets[MAX_SOCKETS_NUMBER];
 
 //Pour la reception de pdu
 int expected_seq = 0;
+int n_seq = 0;
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
@@ -106,21 +108,61 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
         mic_tcp_pdu PDU;
+        mic_tcp_pdu Recv_PDU;
 
-        // MAJ ACK PE
+        int bytes_sent = 0;
+        int nb_retransmit = 0;
+        int ack_recv = 0;
+        unsigned long ms_timer = 100.0;
+        int result = -1;
+
+        // MESSAGE UTILE
 
         PDU.payload.data = mesg;        // buffer dans lequel est stockée les données utiles
         PDU.payload.size = mesg_size;   // taille du message utile
 
+        // HEADER
+
         PDU.header.dest_port = sockets[mic_sock].remote_addr.port; // port de destination
         PDU.header.source_port = sockets[mic_sock].local_addr.port; // port source
 
-        int bytes_sent = IP_send(PDU,sockets[mic_sock].remote_addr.ip_addr);         // traitement du pdu via le protocole inférieure
+        
 
-        // WAIT FOR ACK
+        while(!ack_recv && nb_retransmit < MAX_RETRY){
 
-        return bytes_sent;
+            // SEND OR RETRY
 
+            bytes_sent = IP_send(PDU,sockets[mic_sock].remote_addr.ip_addr);
+
+            // WAIT FOR ACK
+
+            while(result == -1){
+
+                // le Recv_PDU contient l'acquittement et la gestion de timer est géré par IP_recv
+                result = IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, ms_timer);
+            }
+
+            // on vérifie que l'on reçois le bon num d'acquittement et on met ack_recv à true
+
+            if(result != -1 && Recv_PDU.header.ack && Recv_PDU.header.ack_num == n_seq)
+                ack_recv = 1;
+
+            // s'il agissait pas d'un ack ou que le num est le mauvais, on se prépare à la retransmission
+            else
+                nb_retransmit++;
+
+        }
+
+        if(ack_recv){
+
+            // MAJ n_seq
+
+            n_seq = (n_seq+1)%2;
+            return bytes_sent;
+        }
+        else 
+            return -1;
+        
     }
     else
         return -1;
