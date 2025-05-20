@@ -7,6 +7,9 @@
 
 int sock_nb = 0;
 mic_tcp_sock sockets[MAX_SOCKETS_NUMBER]; 
+
+//Pour la reception de pdu
+int expected_seq = 0;
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
@@ -176,12 +179,31 @@ int mic_tcp_close(int socket)
  * le buffer de réception du socket. Cette fonction utilise la fonction
  * app_buffer_put().
  */
+
 void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_ip_addr remote_addr)
 {
+    
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 
+    mic_tcp_pdu pdu_ack;
+    pdu_ack.header.ack = 1;
+    /*Si on recu bien le pdu attendu on le met dans le buffer et on envoie un ack*/
+    if(pdu.header.seq_num == expected_seq)
+    {
+        app_buffer_put(pdu.payload);
 
-    app_buffer_put(pdu.payload);
+        
+        pdu.header.ack_num = pdu.header.seq_num;
+        
+        expected_seq = (expected_seq + 1)%2;
+    }
+    /*Sinon on a recu un doublon et dans ce cas on envoie juste un ack sans le mettre 
+    dans le buffer donc pas besoin de faire un faire un else car dans tous les cas on
+    fait un send*/
+    
 
-    // SEND ACK
+    //SEND ACK
+        IP_send(pdu_ack,remote_addr);
+
+    
 }
