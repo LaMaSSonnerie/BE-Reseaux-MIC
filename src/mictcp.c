@@ -103,6 +103,9 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
         mic_tcp_pdu PDU;
+
+        // MAJ ACK PE
+
         PDU.payload.data = mesg;        // buffer dans lequel est stockée les données utiles
         PDU.payload.size = mesg_size;   // taille du message utile
 
@@ -110,6 +113,8 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         PDU.header.source_port = sockets[mic_sock].local_addr.port; // port source
 
         int bytes_sent = IP_send(PDU,sockets[mic_sock].remote_addr.ip_addr);         // traitement du pdu via le protocole inférieure
+
+        // WAIT FOR ACK
 
         return bytes_sent;
 
@@ -137,6 +142,7 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
         payload.size = max_mesg_size;
 
         int effective_data_size = app_buffer_get(payload);
+
 
         return effective_data_size;
 
@@ -170,9 +176,12 @@ int mic_tcp_close(int socket)
  * le buffer de réception du socket. Cette fonction utilise la fonction
  * app_buffer_put().
  */
-void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_ip_addr remote_addr) // on vérifie pas que le remote_addr est associé à un port d'écoute, on est en version 1
+void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_ip_addr remote_addr)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 
+
     app_buffer_put(pdu.payload);
+
+    // SEND ACK
 }
