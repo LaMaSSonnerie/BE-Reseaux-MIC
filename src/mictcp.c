@@ -4,6 +4,7 @@
 #define MAX_SOCKETS_NUMBER 16 
 #define MAX_RETRY 5
 
+
 // au lieu de se contenter de un seul socket, on crée un tableau de socket pour pouvoir en gérer plusieurs
 
 int sock_nb = 0;
