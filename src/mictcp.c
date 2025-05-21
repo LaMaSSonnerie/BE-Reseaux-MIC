@@ -8,8 +8,9 @@
 
 int sock_nb = 0;
 mic_tcp_sock sockets[MAX_SOCKETS_NUMBER];
+int sock_init = 0;
 
-//Pour la reception de pdu
+//Pour la reception de pdu, PA et PE
 int expected_seq = 0;
 int n_seq = 0;
 /*
@@ -22,6 +23,14 @@ int mic_tcp_socket(start_mode sm)
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     result = initialize_components(sm); /* Appel obligatoire */
     set_loss_rate(0);
+
+
+    // initialisation du tableau de socket
+    if(!sock_init){
+        for(int i = 0; i < MAX_SOCKETS_NUMBER; i++)
+            sockets[i].fd = -1; 
+        sock_init = 1;
+    } 
 
     if(result != -1){ // ça ne sert à rien de créer le socket si on a pas reussi a initialiser les outils pour la programmation asynchrone
 
@@ -107,6 +116,8 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 
     if(0 <= mic_sock && mic_sock < MAX_SOCKETS_NUMBER){
 
+        set_loss_rate(90); // pour simuler les paquets perdu
+
         mic_tcp_pdu PDU;
         mic_tcp_pdu Recv_PDU;
 
@@ -114,7 +125,12 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         int nb_retransmit = 0;
         int ack_recv = 0;
         unsigned long ms_timer = 100.0;
+        unsigned long T0 = 0.0;
         int result = -1;
+
+        Recv_PDU.payload.data = malloc(4*sizeof(char));  // omission de notre part, on avait pas malloqué l'espace memoire data
+        Recv_PDU.payload.size = 4*sizeof(char);
+
 
         // MESSAGE UTILE
 
@@ -125,55 +141,55 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 
         PDU.header.dest_port = sockets[mic_sock].remote_addr.port; // port de destination
         PDU.header.source_port = sockets[mic_sock].local_addr.port; // port source
+        PDU.header.seq_num = n_seq;
 
-        
-        puts("BOUCLE\n");
         while(!ack_recv && nb_retransmit < MAX_RETRY){
 
             // SEND OR RETRY
 
             bytes_sent = IP_send(PDU,sockets[mic_sock].remote_addr.ip_addr);
-
+            T0 = get_now_time_msec();
             // WAIT FOR ACK
-            puts("WAIT FOR ACK\n");
-            while(result == -1){
+            while(result == -1 && get_now_time_msec() - T0 < ms_timer){
 
                 // le Recv_PDU contient l'acquittement et la gestion de timer est géré par IP_recv
                 result = IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, ms_timer);
-                perror("Erreur:");
             }
-            puts("END WFA\n");
 
             // on vérifie que l'on reçois le bon num d'acquittement et on met ack_recv à true
 
             if(result != -1 && Recv_PDU.header.ack && Recv_PDU.header.ack_num == n_seq){
                 ack_recv = 1;
-                puts("ACK\n");
+                //puts("ACK\n");
             }
 
             // s'il agissait pas d'un ack ou que le num est le mauvais, on se prépare à la retransmission
             else{
                 nb_retransmit++;
                 result = -1;
-                puts("PB\n");
+                //puts("PB\n");
             }
         }
-        puts("END\n");
+        //puts("END\n");
 
         if(ack_recv){
 
             // MAJ n_seq
 
             n_seq = (n_seq+1)%2;
+            free(Recv_PDU.payload.data);
             return bytes_sent;
 
         }
-        else 
+        else{
+            free(Recv_PDU.payload.data);
             return -1;
+        } 
         
     }
     else
         return -1;
+
 }
 
 /*
@@ -218,6 +234,7 @@ int mic_tcp_close(int socket)
     {
         sockets[socket].fd = -1;
         sockets[socket].state = IDLE;
+        sock_nb--;
         return 0;
     }
     return -1;
@@ -235,17 +252,15 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
     
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 
+    set_loss_rate(0);
     mic_tcp_pdu pdu_ack;
     pdu_ack.header.ack = 1;
+    pdu_ack.header.ack_num = pdu.header.seq_num; // faut le faire avant de vérifier les seq num car soit le msg était un ancien ou l'attendu, il faut ack dans tout les cas
 
     /*Si on recu bien le pdu attendu on le met dans le buffer et on envoie un ack*/
     if(pdu.header.seq_num == expected_seq)
     {
         app_buffer_put(pdu.payload);
-
-        
-        pdu.header.ack_num = pdu.header.seq_num;
-        
         expected_seq = (expected_seq + 1)%2;
     }
     /*Sinon on a recu un doublon et dans ce cas on envoie juste un ack sans le mettre 
@@ -256,3 +271,14 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
     //SEND ACK
     IP_send(pdu_ack,remote_addr);
 }
+
+
+/*
+PB rencontré :
+
+IP_recv je gère pas bien le timer (en tout cas de ce qu'on a vu)
+on a oublié d'allouer de l'espace mem pour la data même si c'était un pdu pour recevoir l'acquittement
+header mal rempli (au mauvais momment) pour l'envoie de l'ack
+oublié de maj le nb de socket quand on en ferme un
+
+*/
