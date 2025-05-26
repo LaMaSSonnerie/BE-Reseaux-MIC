@@ -23,6 +23,10 @@ int maxLose = 2;
 int sentPaquet = 0;
 int lossPaquet = 0;
 
+// debug de cette mécanique
+int total_sent_paquet = 0;
+int total_lose_paquet = 0;
+
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
@@ -130,6 +134,10 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 
     if(0 <= mic_sock && mic_sock < MAX_SOCKETS_NUMBER){
 
+            
+        if(total_sent_paquet != 0)
+            printf("Perdu:%d | envoye:%d\nloss rate :%f\n", total_lose_paquet, total_sent_paquet, (float)total_lose_paquet/(float)total_sent_paquet);
+
         set_loss_rate(0); // pour simuler les paquets perdu
 
         mic_tcp_pdu PDU;
@@ -139,8 +147,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         int nb_retransmit = 0;
         int ack_recv = 0;
         unsigned long ms_timer = 100.0;
-        unsigned long T0 = 0.0;
-        int result = -1;
+        int result;
 
         Recv_PDU.payload.data = malloc(4*sizeof(char));  // omission de notre part, on avait pas malloqué l'espace memoire data
         Recv_PDU.payload.size = 4*sizeof(char);
@@ -162,31 +169,37 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
             lossPaquet = 0;
         }
 
+
         while(!ack_recv && nb_retransmit < MAX_RETRY){
 
             // SEND OR RETRY
-
+            result = -1;
             bytes_sent = IP_send(PDU,sockets[mic_sock].remote_addr.ip_addr);
-            T0 = get_now_time_msec();
+            
             // WAIT FOR ACK
-            while(result == -1 && get_now_time_msec() - T0 < ms_timer){
-
-                // le Recv_PDU contient l'acquittement et la gestion de timer est géré par IP_recv
-                result = IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, ms_timer);
-            }
+            
+            result = IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, ms_timer);
+            sentPaquet = (sentPaquet+1) % windowPaquet;
+            total_sent_paquet++;
 
             // on vérifie que l'on reçois le bon num d'acquittement et on met ack_recv à true
 
+            
             if(result != -1 && Recv_PDU.header.ack && Recv_PDU.header.ack_num == n_seq){
                 ack_recv = 1;
                 //puts("ACK\n");
             }
 
-            // s'il agissait pas d'un ack ou que le num est le mauvais, on se prépare à la retransmission
+            // s'il agissait pas d'un ack ou que le num est le mauvais ou que le temps est dépassé, on se prépare à la retransmission
             else{
-
+                if(lossPaquet < maxLose){
+                    lossPaquet++;
+                    total_lose_paquet++;
+                    free(Recv_PDU.payload.data);
+                    return -1;
+                    
+                }
                 nb_retransmit++;
-                result = -1;
                 //puts("PB\n");
             }
         }
@@ -198,7 +211,6 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 
             n_seq = (n_seq+1)%2;
             free(Recv_PDU.payload.data);
-            sentPaquet = sentPaquet % windowPaquet;
             return bytes_sent;
 
         }
