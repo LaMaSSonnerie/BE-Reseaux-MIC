@@ -6,18 +6,28 @@
 
 
 // au lieu de se contenter de un seul socket, on crée un tableau de socket pour pouvoir en gérer plusieurs
-
 int sock_nb = 0;
 mic_tcp_sock sockets[MAX_SOCKETS_NUMBER];
+
+// variable pour savoir si le tableau a été initialiser sinon on l'initialise lors de la création du premier socket
 int sock_init = 0;
 
 //Pour la reception de pdu, PA et PE
 int expected_seq = 0;
 int n_seq = 0;
+
+
+//pour une fiabilité partielle 
+int windowPaquet = 10;
+int maxLose = 2;
+int sentPaquet = 0;
+int lossPaquet = 0;
+
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
  */
+
 int mic_tcp_socket(start_mode sm)
 {
     int result = -1;
@@ -59,7 +69,9 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
 
-    if(0 <= socket && socket < MAX_SOCKETS_NUMBER){  // pareil je suis censé faire cette vérification sur un tableau 
+
+    // on vériifie que le descripteur existe sinon on quitte immédiatement le sous programme et on le fait dans quasiment toutes les fonctions
+    if(0 <= socket && socket < MAX_SOCKETS_NUMBER){ 
 
         sockets[socket].local_addr = addr; // association de l'adresse local et du socket
         return 0;
@@ -73,12 +85,13 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
  * Met le socket en état d'acceptation de connexions
  * Retourne 0 si succès, -1 si erreur
  */
+
 int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr) // appelé par le programme puits
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
-        sockets[socket].remote_addr = *addr;  //
+        sockets[socket].remote_addr = *addr;
         return 0;
     }
     else
@@ -117,7 +130,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 
     if(0 <= mic_sock && mic_sock < MAX_SOCKETS_NUMBER){
 
-        set_loss_rate(90); // pour simuler les paquets perdu
+        set_loss_rate(0); // pour simuler les paquets perdu
 
         mic_tcp_pdu PDU;
         mic_tcp_pdu Recv_PDU;
@@ -144,6 +157,11 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         PDU.header.source_port = sockets[mic_sock].local_addr.port; // port source
         PDU.header.seq_num = n_seq;
 
+        if(sentPaquet == 0){
+
+            lossPaquet = 0;
+        }
+
         while(!ack_recv && nb_retransmit < MAX_RETRY){
 
             // SEND OR RETRY
@@ -166,6 +184,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 
             // s'il agissait pas d'un ack ou que le num est le mauvais, on se prépare à la retransmission
             else{
+
                 nb_retransmit++;
                 result = -1;
                 //puts("PB\n");
@@ -179,6 +198,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 
             n_seq = (n_seq+1)%2;
             free(Recv_PDU.payload.data);
+            sentPaquet = sentPaquet % windowPaquet;
             return bytes_sent;
 
         }
