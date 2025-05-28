@@ -114,11 +114,42 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
 
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
+        mic_tcp_pdu pdu_syn;
+        pdu_syn.header.syn = 1;
+        pdu_syn.header.ack = 0;
+
+        IP_send(pdu_syn,addr.ip_addr);
+
+        //on se met en état wait 
+        sockets[socket].state = SYN_SENT;
+        mic_tcp_pdu pdu_syn_ack;
+        
+        if(IP_recv(&pdu_syn_ack,&sockets[socket].local_addr.ip_addr,&addr.ip_addr,100) == -1) 
+            return -1;
+
+        //a ce stade on a recu le syn_ack
+        if(pdu_syn_ack.header.syn == 1 && pdu_syn_ack.header.ack == 1)
+        {
+            mic_tcp_pdu pdu_ack;
+            pdu_ack.header.syn = 0;
+            pdu_ack.header.ack = 1;
+
+            IP_send(pdu_ack,addr.ip_addr);
+            sockets[socket].state = ESTABLISHED;
+            
+
+        }
+
+       
+
         sockets[socket].remote_addr = addr; // faut quand même que l'on sache à qui on envoie la demande de connexion. On ne connaît pas l'adresse distante lors de la creation du socket
         return 0;
 
     } 
 
+    
+    
+    
     else
         return -1;
 }
