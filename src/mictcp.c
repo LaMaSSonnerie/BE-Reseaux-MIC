@@ -1,5 +1,6 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
+#include <string.h>
 
 #define MAX_SOCKETS_NUMBER 16 
 #define MAX_RETRY 5
@@ -96,9 +97,11 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr) // appelé par le progra
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
-        
+        sockets[socket].remote_addr = *addr; // faut quand même que l'on sache à qui on envoie la demande de connexion. On ne connaît pas l'adresse distante lors de la creation du socket
+
         while(sockets[socket].state != SYN_RECEIVED);
         while(sockets[socket].state != ESTABLISHED);
+
 
         return 0;
     }
@@ -121,15 +124,22 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
         mic_tcp_pdu pdu_syn;
         pdu_syn.header.syn = 1;
         pdu_syn.header.ack = 0;
+        pdu_syn.payload.size = 0;
+        pdu_syn.header.dest_port = addr.port;
 
         IP_send(pdu_syn,addr.ip_addr);
+
 
         //on se met en état wait 
         sockets[socket].state = SYN_SENT;
         mic_tcp_pdu pdu_syn_ack;
+        pdu_syn_ack.payload.size = 0;
+
         
-        if(IP_recv(&pdu_syn_ack,&sockets[socket].local_addr.ip_addr,&addr.ip_addr,100) == -1) 
+        if(IP_recv(&pdu_syn_ack,&sockets[socket].local_addr.ip_addr,&addr.ip_addr,100.0) == -1){
+
             return -1;
+        }
 
         //a ce stade on a recu le syn_ack
         if(pdu_syn_ack.header.syn == 1 && pdu_syn_ack.header.ack == 1)
@@ -137,17 +147,20 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
             mic_tcp_pdu pdu_ack;
             pdu_ack.header.syn = 0;
             pdu_ack.header.ack = 1;
-
+            pdu_ack.payload.size = 0;
+            pdu_ack.header.dest_port = addr.port;
             IP_send(pdu_ack,addr.ip_addr);
             sockets[socket].state = ESTABLISHED;
+
+            sockets[socket].remote_addr = addr; // faut quand même que l'on sache à qui on envoie la demande de connexion. On ne connaît pas l'adresse distante lors de la creation du socket
             
+            return 0;
 
         }
 
-       
-
-        sockets[socket].remote_addr = addr; // faut quand même que l'on sache à qui on envoie la demande de connexion. On ne connaît pas l'adresse distante lors de la creation du socket
-        return 0;
+       else{
+            return -1;
+       }
 
     } 
 
@@ -184,8 +197,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         unsigned long ms_timer = 100.0;
         int result;
 
-        Recv_PDU.payload.data = malloc(4*sizeof(char));  // omission de notre part, on avait pas malloqué l'espace memoire data
-        Recv_PDU.payload.size = 4*sizeof(char);
+        Recv_PDU.payload.size = 0;
 
         // MESSAGE UTILE
 
@@ -229,7 +241,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
                 if(lossPaquet < maxLose){
                     lossPaquet++;
                     total_lose_paquet++;
-                    free(Recv_PDU.payload.data);
+                    
                     return -1;
                     
                 }
@@ -244,12 +256,10 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
             // MAJ n_seq
 
             n_seq = (n_seq+1)%2;
-            free(Recv_PDU.payload.data);
             return bytes_sent;
 
         }
         else{
-            free(Recv_PDU.payload.data);
             return -1;
         } 
         
@@ -328,9 +338,11 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 
     for(int i = 0; i < MAX_SOCKETS_NUMBER; i++){
 
+
         if(sockets[i].local_addr.port == pdu.header.dest_port){
 
             if(sockets[i].state == ESTABLISHED){
+
         
                 if(pdu.header.seq_num == expected_seq)
                 {
@@ -341,12 +353,14 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 
             else if(sockets[i].state == SYN_RECEIVED){
 
+
                 if(pdu.header.ack){
                     sockets[i].state = ESTABLISHED;
                 }
             }
 
             else if(sockets[i].state == IDLE){
+
 
                 if(pdu.header.syn && !pdu.header.ack){
 
