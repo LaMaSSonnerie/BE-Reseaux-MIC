@@ -210,11 +210,6 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         PDU.header.source_port = sockets[mic_sock].local_addr.port; // port source
         PDU.header.seq_num = n_seq;
 
-        if(sentPaquet == 0){
-
-            lossPaquet = 0;
-        }
-
 
         while(!ack_recv && nb_retransmit < MAX_RETRY){
 
@@ -225,12 +220,19 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
             // WAIT FOR ACK
             
             result = IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, ms_timer);
+            
             sentPaquet = (sentPaquet+1) % windowPaquet;
+
+            if(sentPaquet == 0){
+
+            lossPaquet = 0;
+            }
+
             total_sent_paquet++;
 
             // on vérifie que l'on reçois le bon num d'acquittement et on met ack_recv à true
 
-            
+            printf("PE = %d| ACK_N = %d \n", n_seq, Recv_PDU.header.ack_num);
             if(result != -1 && Recv_PDU.header.ack && Recv_PDU.header.ack_num == n_seq){
                 ack_recv = 1;
                 //puts("ACK\n");
@@ -343,12 +345,15 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 
             if(sockets[i].state == ESTABLISHED){
 
-        
+                
+                printf("SEQ = %d| PA = %d, ACK_N = %d\n ", pdu.header.seq_num, expected_seq, pdu_ack.header.ack_num);
                 if(pdu.header.seq_num == expected_seq)
                 {
+
                     app_buffer_put(pdu.payload);
                     expected_seq = (expected_seq + 1)%2;
                 }
+
             }
 
             else if(sockets[i].state == SYN_RECEIVED){
@@ -369,17 +374,19 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
                 }
             }
 
-            
+            /*Sinon on a recu un doublon et dans ce cas on envoie juste un ack sans le mettre 
+            dans le buffer donc pas besoin de faire un faire un else car dans tous les cas on
+            fait un send*/
+                        
+
+            //SEND ACK or SYN 
+            printf("Evoie ack N:%d\n", pdu_ack.header.ack_num);
+            IP_send(pdu_ack,remote_addr); 
 
         }
-    }
-
-    /*Sinon on a recu un doublon et dans ce cas on envoie juste un ack sans le mettre 
-    dans le buffer donc pas besoin de faire un faire un else car dans tous les cas on
-    fait un send*/
     
-
-    //SEND ACK or SYN ACK
-    IP_send(pdu_ack,remote_addr);
+       
+    }
+    
 }
 
