@@ -1,6 +1,7 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
 #include <string.h>
+#include <pthread.h>
 
 
 #define MAX_SOCKETS_NUMBER 16 
@@ -29,6 +30,12 @@ int lossPaquet = 0;
 // debug de cette mécanique
 int total_sent_paquet = 0;
 int total_lose_paquet = 0;
+
+
+//mutex et cond
+
+pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -100,9 +107,23 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr) // appelé par le progra
 
         sockets[socket].remote_addr = *addr; // faut quand même que l'on sache à qui on envoie la demande de connexion. On ne connaît pas l'adresse distante lors de la creation du socket
 
-        while(sockets[socket].state != SYN_RECEIVED);
-        while(sockets[socket].state != ESTABLISHED);
+        //while(sockets[socket].state != SYN_RECEIVED);
+        //while(sockets[socket].state != ESTABLISHED);
 
+        if(sockets[socket].state != SYN_RECEIVED){
+
+            puts("3\n");
+
+            pthread_mutex_lock(&mtx);
+
+            pthread_cond_wait(&cond, &mtx);
+
+            pthread_mutex_unlock(&mtx);
+        }
+
+        puts("4\n");
+
+        while(sockets[socket].state != ESTABLISHED);
 
         return 0;
     }
@@ -243,7 +264,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
             // WAIT FOR ACK
             
             result = IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, ms_timer);
-            printf("res:%d\n",result);
+
             sentPaquet = (sentPaquet+1) % windowPaquet;
 
             if(sentPaquet == 0){
@@ -417,7 +438,12 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
                 
 
                     pdu_ack.header.syn = 1;
+                    pthread_mutex_lock(&mtx);
+                    puts("1\n");
                     sockets[i].state = SYN_RECEIVED;
+                    pthread_cond_signal(&cond);
+                    puts("2\n");
+                    pthread_mutex_unlock(&mtx);
                 }
             }
 
