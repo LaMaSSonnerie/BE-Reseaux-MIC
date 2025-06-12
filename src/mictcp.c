@@ -112,7 +112,7 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr) // appelé par le progra
 
         if(sockets[socket].state != SYN_RECEIVED){
 
-            puts("3\n");
+           
 
             pthread_mutex_lock(&mtx);
 
@@ -121,10 +121,16 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr) // appelé par le progra
             pthread_mutex_unlock(&mtx);
         }
 
-        puts("4\n");
+        
 
-        while(sockets[socket].state != ESTABLISHED);
+        //while(sockets[socket].state != ESTABLISHED);
+        if(sockets[socket].state != ESTABLISHED){
+            pthread_mutex_lock(&mtx);
 
+            pthread_cond_wait(&cond, &mtx);
+
+            pthread_mutex_unlock(&mtx);
+        }
         return 0;
     }
     else
@@ -406,7 +412,10 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 
 
                 if(pdu.header.ack){
+                    pthread_mutex_lock(&mtx);
                     sockets[i].state = ESTABLISHED;
+                    pthread_cond_signal(&cond);
+                    pthread_mutex_unlock(&mtx);
                     return;
                 }
             }
@@ -439,10 +448,10 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 
                     pdu_ack.header.syn = 1;
                     pthread_mutex_lock(&mtx);
-                    puts("1\n");
+          
                     sockets[i].state = SYN_RECEIVED;
                     pthread_cond_signal(&cond);
-                    puts("2\n");
+                
                     pthread_mutex_unlock(&mtx);
                 }
             }
