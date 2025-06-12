@@ -3,7 +3,7 @@
 #include <string.h>
 
 #define MAX_SOCKETS_NUMBER 16 
-#define MAX_RETRY 5
+#define MAX_RETRY 10
 #define PAQUET_WINDOW 100
 
 
@@ -21,7 +21,7 @@ int n_seq = 0;
 
 //pour une fiabilité partielle 
 int windowPaquet = PAQUET_WINDOW;
-int maxLose = 20;
+int maxLose = 0;
 int sentPaquet = 0;
 int lossPaquet = 0;
 
@@ -39,7 +39,7 @@ int mic_tcp_socket(start_mode sm)
     int result = -1;
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     result = initialize_components(sm); /* Appel obligatoire */
-    set_loss_rate(0);
+    set_loss_rate(50);
 
 
     // initialisation du tableau de socket
@@ -121,11 +121,18 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
 
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
+        int loss_rate_req = 20;
+
         mic_tcp_pdu pdu_syn;
         pdu_syn.header.syn = 1;
         pdu_syn.header.ack = 0;
         pdu_syn.payload.size = 0;
         pdu_syn.header.dest_port = addr.port;
+
+        pdu_syn.payload.data =  malloc(sizeof(char)*3);
+        pdu_syn.payload.size = 3*sizeof(char);
+
+        sprintf(pdu_syn.payload.data,"%d",loss_rate_req);
 
         IP_send(pdu_syn,addr.ip_addr);
 
@@ -133,17 +140,22 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
         //on se met en état wait 
         sockets[socket].state = SYN_SENT;
         mic_tcp_pdu pdu_syn_ack;
-        pdu_syn_ack.payload.size = 0;
-
+        pdu_syn_ack.payload.data = malloc(sizeof(char)*3);
+        pdu_syn_ack.payload.size = sizeof(char)*3;
         
         if(IP_recv(&pdu_syn_ack,&sockets[socket].local_addr.ip_addr,&addr.ip_addr,100.0) == -1){
-
             return -1;
         }
 
         //a ce stade on a recu le syn_ack
         if(pdu_syn_ack.header.syn == 1 && pdu_syn_ack.header.ack == 1)
         {
+
+            if(atoi(pdu_syn_ack.payload.data) != atoi(pdu_syn.payload.data))
+                return -1;
+            
+            maxLose = loss_rate_req;
+                
             mic_tcp_pdu pdu_ack;
             pdu_ack.header.syn = 0;
             pdu_ack.header.ack = 1;
@@ -186,7 +198,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         if(total_sent_paquet != 0)
             printf("Perdu:%d | envoye:%d\nloss rate :%f\n", total_lose_paquet, total_sent_paquet, (float)total_lose_paquet/(float)total_sent_paquet);
 
-        set_loss_rate(0); // pour simuler les paquets perdu
+        //set_loss_rate(0); // pour simuler les paquets perdu
 
         mic_tcp_pdu PDU;
         mic_tcp_pdu Recv_PDU;
@@ -197,7 +209,9 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         unsigned long ms_timer = 100.0;
         int result;
 
-        Recv_PDU.payload.size = 0;
+        Recv_PDU.payload.data = malloc(sizeof(char)*4);
+
+        Recv_PDU.payload.size = 4*sizeof(char);
 
         // MESSAGE UTILE
 
@@ -220,7 +234,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
             // WAIT FOR ACK
             
             result = IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, ms_timer);
-            
+            printf("res:%d\n",result);
             sentPaquet = (sentPaquet+1) % windowPaquet;
 
             if(sentPaquet == 0){
@@ -232,8 +246,8 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 
             // on vérifie que l'on reçois le bon num d'acquittement et on met ack_recv à true
 
-            printf("PE = %d| ACK_N = %d \n", n_seq, Recv_PDU.header.ack_num);
-            if(result != -1 && Recv_PDU.header.ack && Recv_PDU.header.ack_num == n_seq){
+            printf("PE = %d| ACK_N = %d | ack = %d\n", n_seq, Recv_PDU.header.ack_num, Recv_PDU.header.ack);
+            if(result != -1 && Recv_PDU.header.ack == 1 && Recv_PDU.header.ack_num == n_seq){
                 ack_recv = 1;
                 //puts("ACK\n");
             }
@@ -243,6 +257,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
                 if(lossPaquet < maxLose){
                     lossPaquet++;
                     total_lose_paquet++;
+                    free(Recv_PDU.payload.data);
                     
                     return -1;
                     
@@ -258,10 +273,12 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
             // MAJ n_seq
 
             n_seq = (n_seq+1)%2;
+            free(Recv_PDU.payload.data);
             return bytes_sent;
 
         }
         else{
+            free(Recv_PDU.payload.data);
             return -1;
         } 
         
@@ -331,8 +348,9 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
     
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 
-    set_loss_rate(0);
+    //set_loss_rate(0);
     mic_tcp_pdu pdu_ack;
+    pdu_ack.payload.size = 0;
     pdu_ack.header.ack = 1;
     pdu_ack.header.ack_num = pdu.header.seq_num; // faut le faire avant de vérifier les seq num car soit le msg était un ancien ou l'attendu, il faut ack dans tout les cas
 
@@ -361,13 +379,28 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 
                 if(pdu.header.ack){
                     sockets[i].state = ESTABLISHED;
+                    return;
                 }
             }
 
             else if(sockets[i].state == IDLE){
 
+                int negociated_loss_rate = atoi(pdu.payload.data);
+                int loss_rate_request = 20;
 
                 if(pdu.header.syn && !pdu.header.ack){
+
+                    pdu_ack.payload.data = malloc(sizeof(char)*3);
+                        pdu_ack.payload.size = sizeof(char)*3;
+
+                    if(negociated_loss_rate <= loss_rate_request){
+                        sprintf(pdu_ack.payload.data,"%d",negociated_loss_rate);
+                    }
+                    
+                    else{
+                        sprintf(pdu_ack.payload.data,"%d",loss_rate_request);
+                    }
+                
 
                     pdu_ack.header.syn = 1;
                     sockets[i].state = SYN_RECEIVED;
@@ -375,7 +408,7 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
             }
 
             /*Sinon on a recu un doublon et dans ce cas on envoie juste un ack sans le mettre 
-            dans le buffer donc pas besoin de faire un faire un else car dans tous les cas on
+            dans le buffer donc pas besoin de faire  un else car dans tous les cas on
             fait un send*/
                         
 
