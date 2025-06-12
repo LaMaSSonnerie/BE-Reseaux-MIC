@@ -121,6 +121,8 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
 
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
+        // loss rate negocier par la source
+
         int loss_rate_req = 20;
 
         mic_tcp_pdu pdu_syn;
@@ -151,8 +153,14 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
         if(pdu_syn_ack.header.syn == 1 && pdu_syn_ack.header.ack == 1)
         {
 
-            if(atoi(pdu_syn_ack.payload.data) != atoi(pdu_syn.payload.data))
+            // si le puits a refuser le loss rate du puits
+
+            if(atoi(pdu_syn_ack.payload.data) != atoi(pdu_syn.payload.data)){
+
+                sockets[socket].state = IDLE;
                 return -1;
+            }
+                
             
             maxLose = loss_rate_req;
                 
@@ -246,7 +254,6 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 
             // on vérifie que l'on reçois le bon num d'acquittement et on met ack_recv à true
 
-            printf("PE = %d| ACK_N = %d | ack = %d\n", n_seq, Recv_PDU.header.ack_num, Recv_PDU.header.ack);
             if(result != -1 && Recv_PDU.header.ack == 1 && Recv_PDU.header.ack_num == n_seq){
                 ack_recv = 1;
                 //puts("ACK\n");
@@ -360,11 +367,10 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 
 
         if(sockets[i].local_addr.port == pdu.header.dest_port){
+            
 
             if(sockets[i].state == ESTABLISHED){
 
-                
-                printf("SEQ = %d| PA = %d, ACK_N = %d\n ", pdu.header.seq_num, expected_seq, pdu_ack.header.ack_num);
                 if(pdu.header.seq_num == expected_seq)
                 {
 
@@ -385,7 +391,11 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 
             else if(sockets[i].state == IDLE){
 
+
+                // loss rate negocier par la source
                 int negociated_loss_rate = atoi(pdu.payload.data);
+
+                // loss negocier par le puits
                 int loss_rate_request = 20;
 
                 if(pdu.header.syn && !pdu.header.ack){
@@ -393,10 +403,13 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
                     pdu_ack.payload.data = malloc(sizeof(char)*3);
                         pdu_ack.payload.size = sizeof(char)*3;
 
+
+                    // si le loss rate de la source est compatible avec celui du puit
                     if(negociated_loss_rate <= loss_rate_request){
                         sprintf(pdu_ack.payload.data,"%d",negociated_loss_rate);
                     }
                     
+                    // sinon le puits negocie sont loss rate
                     else{
                         sprintf(pdu_ack.payload.data,"%d",loss_rate_request);
                     }
@@ -413,7 +426,6 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
                         
 
             //SEND ACK or SYN 
-            printf("Evoie ack N:%d\n", pdu_ack.header.ack_num);
             IP_send(pdu_ack,remote_addr); 
 
         }
