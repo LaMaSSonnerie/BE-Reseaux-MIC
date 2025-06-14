@@ -1,41 +1,41 @@
 
-/* ----------------------------------------V1--------------------------------------*/
+/* ----------------------------------------V2--------------------------------------*/
 
 #include <mictcp.h>
 #include <api/mictcp_core.h>
 
 #define MAX_SOCKETS_NUMBER 16 
+// nombre maximale de réemission
+#define MAX_RETRY 20
+// temps t'attente maximale entre émission et acquittement
+#define WAIT_TIME 100.0 
 
-
-// nombre de socket utilisé
-int sock_nb = 0;
-
-// pour éviter que il y ait de vlaur aléatoire dans le tableau des socket, cette variable permet de savoir si le tableau est initialisé ou pas
-int sock_init = 0;
 
 // au lieu de se contenter de un seul socket, on crée un tableau de socket pour pouvoir en gérer plusieurs
-mic_tcp_sock sockets[MAX_SOCKETS_NUMBER]; 
 
+int sock_nb = 0;
+mic_tcp_sock sockets[MAX_SOCKETS_NUMBER];
+int sock_init = 0;
 
+//Pour la reception de pdu, PA et PE
+int expected_seq = 0;
+int n_seq = 0;
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
  */
-
-
 int mic_tcp_socket(start_mode sm)
 {
     int result = -1;
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     result = initialize_components(sm); /* Appel obligatoire */
-    set_loss_rate(30);
+    set_loss_rate(40);
+
 
     // initialisation du tableau de socket
-
     if(!sock_init){
-
-        for(int i = 0; i < MAX_SOCKETS_NUMBER;i++)
-            sockets[i].fd = -1;
+        for(int i = 0; i < MAX_SOCKETS_NUMBER; i++)
+            sockets[i].fd = -1; 
         sock_init = 1;
     } 
 
@@ -72,11 +72,9 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
 
-    // on vérifie si le socket existe
-    if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
+    if(0 <= socket && socket < MAX_SOCKETS_NUMBER){  // pareil je suis censé faire cette vérification sur un tableau 
 
-        // association de l'adresse local et du socket
-        sockets[socket] .local_addr = addr; 
+        sockets[socket].local_addr = addr; // association de l'adresse local et du socket
         return 0;
     }
 
@@ -87,15 +85,13 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 /*
  * Met le socket en état d'acceptation de connexions
  * Retourne 0 si succès, -1 si erreur
- * appellé par le puits
  */
-
-int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
+int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr) // appelé par le programme puits
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
-        // enregistrement de l'adresse de l'hôte distant
+        // enregistrement adresse distante
         sockets[socket].remote_addr = *addr;
         return 0;
     }
@@ -108,16 +104,14 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 /*
  * Permet de réclamer l’établissement d’une connexion
  * Retourne 0 si la connexion est établie, et -1 en cas d’échec
- * appellé  par le programme source
  */
-int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
+int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le programme source
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
 
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
-        // enregistrement de l'adresse de l'hôte distant
-        sockets[socket].remote_addr = addr; 
+        sockets[socket].remote_addr = addr; // faut quand même que l'on sache à qui on envoie la demande de connexion. On ne connaît pas l'adresse distante lors de la creation du socket
         return 0;
 
     } 
@@ -130,6 +124,7 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
  * Permet de réclamer l’envoi d’une donnée applicative
  * Retourne la taille des données envoyées, et -1 en cas d'erreur
  */
+ 
 int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
@@ -137,20 +132,70 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
     if(0 <= mic_sock && mic_sock < MAX_SOCKETS_NUMBER){
 
         mic_tcp_pdu PDU;
+        mic_tcp_pdu Recv_PDU;
+
+        int bytes_sent = 0;
+        int nb_retransmit = 0;
+        //ack reçu ou pas
+        int ack_recv = 0;
+
+        int result = -1;
+ 
+        Recv_PDU.payload.size = 0;
+
+
+        // MESSAGE UTILE
+
         PDU.payload.data = mesg;        // buffer dans lequel est stockée les données utiles
         PDU.payload.size = mesg_size;   // taille du message utile
 
+        // HEADER
+
         PDU.header.dest_port = sockets[mic_sock].remote_addr.port; // port de destination
         PDU.header.source_port = sockets[mic_sock].local_addr.port; // port source
+        PDU.header.seq_num = n_seq;
 
-        // envoie du pdu depuis la couche IP
-        int bytes_sent = IP_send(PDU,sockets[mic_sock].remote_addr.ip_addr);
+        while(!ack_recv && nb_retransmit < MAX_RETRY){
 
-        return bytes_sent;
+            // SEND OR RETRY
 
+            bytes_sent = IP_send(PDU,sockets[mic_sock].remote_addr.ip_addr);
+            // WAIT FOR ACK
+
+            // le Recv_PDU contient l'acquittement 
+            result = IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, WAIT_TIME);
+
+            // on vérifie que l'on reçois le bon num d'acquittement et on met ack_recv à true
+
+            if(result != -1 && Recv_PDU.header.ack && Recv_PDU.header.ack_num == n_seq){
+                ack_recv = 1;
+            }
+
+            // s'il agissait pas d'un ack ou que le num est le mauvais, on se prépare à la retransmission
+            else{
+                nb_retransmit++;
+                result = -1;
+            }
+        }
+
+        // aquitté
+        if(ack_recv){
+
+            // MAJ n_seq
+
+            n_seq = (n_seq+1)%2;
+            return bytes_sent;
+
+        }
+        else{
+
+            return -1;
+        } 
+        
     }
     else
         return -1;
+
 }
 
 /*
@@ -159,7 +204,6 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
  * Retourne le nombre d’octets lu ou bien -1 en cas d’erreur
  * NB : cette fonction fait appel à la fonction app_buffer_get()
  */
-
 int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__);printf("\n");
@@ -172,8 +216,8 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
         payload.data = mesg;
         payload.size = max_mesg_size;
 
-        // ecriture des données bufferisé dans la payload
         int effective_data_size = app_buffer_get(payload);
+
 
         return effective_data_size;
 
@@ -194,9 +238,9 @@ int mic_tcp_close(int socket)
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER)
 
     {
-        // fermeture du socket
         sockets[socket].fd = -1;
         sockets[socket].state = IDLE;
+        sock_nb--;
         return 0;
     }
     return -1;
@@ -208,10 +252,30 @@ int mic_tcp_close(int socket)
  * le buffer de réception du socket. Cette fonction utilise la fonction
  * app_buffer_put().
  */
-void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_ip_addr remote_addr) // on vérifie pas que le remote_addr est associé à un port d'écoute, on est en version 1
+
+void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_ip_addr remote_addr)
 {
+
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 
-    // écriture dans le buffer des données reçu
-    app_buffer_put(pdu.payload);
+    mic_tcp_pdu pdu_ack;
+    pdu_ack.header.ack = 1;
+    // numéro ack
+    pdu_ack.header.ack_num = pdu.header.seq_num; 
+
+
+    /*Si on reçoit bien le pdu attendu on le met dans le buffer et on envoie un ack*/
+    if(pdu.header.seq_num == expected_seq)
+    {
+        app_buffer_put(pdu.payload);
+        expected_seq = (expected_seq + 1)%2;
+    }
+
+    /*Sinon on a recu un doublon et dans ce cas on envoie juste un ack sans le mettre 
+    dans le buffer donc pas besoin de faire un faire un else car dans tous les cas on
+    fait un send*/
+    
+
+    //SEND ACK
+    IP_send(pdu_ack,remote_addr);
 }
