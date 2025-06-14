@@ -1,8 +1,10 @@
 
-/* ---------------------------------------V3--------------------------------------*/
+/* ----------------------------------------V4.1--------------------------------------*/
 
 #include <mictcp.h>
 #include <api/mictcp_core.h>
+#include <string.h>
+
 
 #define MAX_SOCKETS_NUMBER 16 
 #define MAX_RETRY 20
@@ -22,14 +24,41 @@ int n_seq = 0;
 
 
 //pour une fiabilité partielle 
-int windowPaquet = 10;
-int WmaxLose = 2;
+int windowPaquet = 100;
+int WmaxLose = 0;
 int WsentPaquet = 0;
 int WlossPaquet = 0;
 
-// pour les stats
+// debug de cette mécanique
 int total_sent_paquet = 0;
 int total_lose_paquet = 0;
+
+
+// le pgcd permet d'ajuster la taille de la fenêtre
+int PGCD(int a, int b){
+
+    if(a == 0 || b == 0)
+        return 0; 
+
+    if(a > b)
+        return PGCD(a-b,b);
+    else if(b > a)
+        return PGCD(a,b-a);
+    else
+        return a;
+} 
+
+// ajuster la taille de la fenêtre
+void reduce_window_paquet(void){
+
+    int pgcd_w = PGCD(windowPaquet,WmaxLose);
+
+    if(pgcd_w){ 
+        windowPaquet /= pgcd_w;
+        WmaxLose /= pgcd_w;
+    } 
+} 
+
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -106,7 +135,12 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr) // appelé par le progra
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
-        sockets[socket].remote_addr = *addr;
+        // enregistrement adresse distante et on attend pour l'établissement de la connexion
+        sockets[socket].remote_addr = *addr; 
+        while(sockets[socket].state != SYN_RECEIVED);
+        while(sockets[socket].state != ESTABLISHED);
+
+
         return 0;
     }
     else
@@ -125,11 +159,84 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
 
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
-        sockets[socket].remote_addr = addr; // faut quand même que l'on sache à qui on envoie la demande de connexion. On ne connaît pas l'adresse distante lors de la creation du socket
-        return 0;
+        // loss rate negocier par la source
+
+        int loss_rate_req = 20;
+
+        // préparation du SYN
+
+        mic_tcp_pdu pdu_syn;
+        pdu_syn.header.syn = 1;
+        pdu_syn.header.ack = 0;
+        pdu_syn.payload.size = 0;
+        pdu_syn.header.dest_port = addr.port;
+        pdu_syn.payload.data =  malloc(sizeof(char)*3);
+        pdu_syn.payload.size = 3*sizeof(char);
+        sprintf(pdu_syn.payload.data,"%d",loss_rate_req);
+
+        // envoie syn avec loss rate on MAJ l'état du socket
+
+        IP_send(pdu_syn,addr.ip_addr);
+        sockets[socket].state = SYN_SENT;
+
+        //on se met en état wait for syn ack
+        
+        mic_tcp_pdu pdu_syn_ack;
+        pdu_syn_ack.payload.data = malloc(sizeof(char)*3);
+        pdu_syn_ack.payload.size = sizeof(char)*3;
+        
+        if(IP_recv(&pdu_syn_ack,&sockets[socket].local_addr.ip_addr,&addr.ip_addr,100.0) == -1){
+            return -1;
+        }
+
+        //a ce stade on a recu le syn_ack
+        if(pdu_syn_ack.header.syn == 1 && pdu_syn_ack.header.ack == 1)
+        {
+
+            // si le puits a refuser le loss rate du puits, annulation de la connextion
+
+            if(atoi(pdu_syn_ack.payload.data) != atoi(pdu_syn.payload.data)){
+
+                sockets[socket].state = IDLE;
+                return -1;
+            }
+                
+            
+            WmaxLose = loss_rate_req;
+
+            // envoie ack
+                
+            mic_tcp_pdu pdu_ack;
+            pdu_ack.header.syn = 0;
+            pdu_ack.header.ack = 1;
+            pdu_ack.payload.size = 0;
+            pdu_ack.header.dest_port = addr.port;
+            IP_send(pdu_ack,addr.ip_addr);
+
+            sockets[socket].state = ESTABLISHED;
+
+            // enregistrment adresse distante
+
+            sockets[socket].remote_addr = addr; 
+
+            // reduction taille de la fenetre
+
+            reduce_window_paquet();
+            set_loss_rate(90);
+            
+            return 0;
+
+        }
+
+       else{
+            return -1;
+       }
 
     } 
 
+    
+    
+    
     else
         return -1;
 }
@@ -142,11 +249,10 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
 int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-    set_loss_rate(90);
 
     if(0 <= mic_sock && mic_sock < MAX_SOCKETS_NUMBER){
 
-        // statistique de taux de perte
+            
         if(total_sent_paquet != 0)
             printf("Perdu:%d | envoye:%d\nloss rate :%f\n", total_lose_paquet, total_sent_paquet, (float)total_lose_paquet/(float)total_sent_paquet);
 
@@ -158,9 +264,8 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         int ack_recv = 0;
         int result;
 
-        
-        Recv_PDU.payload.size = 0;
 
+        Recv_PDU.payload.size = 0;
 
         // MESSAGE UTILE
 
@@ -173,13 +278,6 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         PDU.header.source_port = sockets[mic_sock].local_addr.port; // port source
         PDU.header.seq_num = n_seq;
 
-        // chagement de fenêtre
-
-        if(WsentPaquet == 0){
-
-            WlossPaquet = 0;
-        }
-
 
         while(!ack_recv && nb_retransmit < MAX_RETRY){
 
@@ -190,21 +288,23 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
             // WAIT FOR ACK
             
             result = IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, WAIT_TIME);
-            
+
+            // changement fenetre
+
+            if(WsentPaquet == 0){
+
+                WlossPaquet = 0;
+            }
 
             // on vérifie que l'on reçois le bon num d'acquittement et on met ack_recv à true
 
-            
-            if(result != -1 && Recv_PDU.header.ack && Recv_PDU.header.ack_num == n_seq){
+            if(result != -1 && Recv_PDU.header.ack == 1 && Recv_PDU.header.ack_num == n_seq){
                 ack_recv = 1;
             }
 
             // s'il agissait pas d'un ack ou que le num est le mauvais ou que le temps est dépassé, on se prépare à la retransmission
             else{
-
-                // perte admissible
                 if(WlossPaquet < WmaxLose){
-
                     WlossPaquet++;
                     total_lose_paquet++;
                     total_sent_paquet++;
@@ -216,24 +316,20 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
                 nb_retransmit++;
             }
         }
-        WsentPaquet = (WsentPaquet+1) % windowPaquet;
-        total_sent_paquet++;
 
-        // ack
+        total_sent_paquet++;
+        WsentPaquet = (WsentPaquet+1) % windowPaquet;
+
         if(ack_recv){
 
             // MAJ n_seq
 
             n_seq = (n_seq+1)%2;
-
-            
             return bytes_sent;
 
         }
-        // perte
         else{
             total_lose_paquet++;
-
             return -1;
         } 
         
@@ -283,9 +379,8 @@ int mic_tcp_close(int socket)
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER)
 
     {
-        // femeture socket
         sockets[socket].fd = -1;
-        sockets[socket].state = IDLE;
+        sockets[socket].state = CLOSED;
         sock_nb--;
         return 0;
     }
@@ -305,23 +400,86 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 
     mic_tcp_pdu pdu_ack;
+    pdu_ack.payload.size = 0;
     pdu_ack.header.ack = 1;
+    pdu_ack.header.ack_num = pdu.header.seq_num; // faut le faire avant de vérifier les seq num car soit le msg était un ancien ou l'attendu, il faut ack dans tout les cas
 
-    // numéro ack
-    pdu_ack.header.ack_num = pdu.header.seq_num; 
+    /*Si on recu bien le pdu attendu on le met dans le buffer et on envoie un ack*/
 
-    /*Si c'est bien le pdu attendu on le met dans le buffer et on envoie un ack*/
-    if(pdu.header.seq_num == expected_seq)
-    {
-        app_buffer_put(pdu.payload);
-        expected_seq = (expected_seq + 1)%2;
-    }
+    for(int i = 0; i < MAX_SOCKETS_NUMBER; i++){
 
-    /*Sinon on a recu un doublon et dans ce cas on envoie juste un ack sans le mettre 
-    dans le buffer donc pas besoin de faire un faire un else car dans tous les cas on
-    fait un send*/
+
+        if(sockets[i].local_addr.port == pdu.header.dest_port){
+            
+
+            // traitement pour connexion établi
+
+            if(sockets[i].state == ESTABLISHED){
+
+                if(pdu.header.seq_num == expected_seq)
+                {
+
+                    app_buffer_put(pdu.payload);
+                    expected_seq = (expected_seq + 1)%2;
+                }
+
+            }
+
+            // traitement pour syn reçu
+
+            else if(sockets[i].state == SYN_RECEIVED){
+
+
+                if(pdu.header.ack){
+                    sockets[i].state = ESTABLISHED;
+                    return;
+                }
+            }
+
+            // traitement pour début de connexion, réponse au syn
+
+            else if(sockets[i].state == IDLE){
+
+
+                // loss rate negocier par la source
+                int negociated_loss_rate = atoi(pdu.payload.data);
+
+                // loss negocier par le puits
+                int loss_rate_request = 20;
+
+                if(pdu.header.syn && !pdu.header.ack){
+
+                    pdu_ack.payload.data = malloc(sizeof(char)*3);
+                    pdu_ack.payload.size = sizeof(char)*3;
+
+
+                    // si le loss rate de la source est compatible avec celui du puit
+                    if(negociated_loss_rate <= loss_rate_request){
+                        sprintf(pdu_ack.payload.data,"%d",negociated_loss_rate);
+                    }
+                    
+                    // sinon le puits negocie sont loss rate
+                    else{
+                        sprintf(pdu_ack.payload.data,"%d",loss_rate_request);
+                    }
+                
+
+                    pdu_ack.header.syn = 1;
+                    sockets[i].state = SYN_RECEIVED;
+                }
+            }
+
+            /*Sinon on a recu un doublon et dans ce cas on envoie juste un ack sans le mettre 
+            dans le buffer donc pas besoin de faire  un else car dans tous les cas on
+            fait un send*/
+                        
+
+            //SEND ACK or SYN 
+            IP_send(pdu_ack,remote_addr); 
+
+        }
     
-
-    //SEND ACK
-    IP_send(pdu_ack,remote_addr);
+       
+    }
+    
 }
