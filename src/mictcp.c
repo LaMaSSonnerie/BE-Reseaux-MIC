@@ -1,14 +1,15 @@
 
-/* ----------------------------------------V4.1--------------------------------------*/
+/* ----------------------------------------V4.2--------------------------------------*/
 
 #include <mictcp.h>
 #include <api/mictcp_core.h>
 #include <string.h>
+#include <pthread.h>
 
 
 #define MAX_SOCKETS_NUMBER 16 
-#define MAX_RETRY 20
-#define WAIT_TIME 100.0 
+#define MAX_RETRY 30
+#define WAIT_TIME 100.0
 
 
 // au lieu de se contenter de un seul socket, on crée un tableau de socket pour pouvoir en gérer plusieurs
@@ -34,7 +35,13 @@ int total_sent_paquet = 0;
 int total_lose_paquet = 0;
 
 
-// le pgcd permet d'ajuster la taille de la fenêtre
+//mutex et cond
+
+pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+
+// PGCD, pour réduite la taille de la fenetre
+
 int PGCD(int a, int b){
 
     if(a == 0 || b == 0)
@@ -48,7 +55,8 @@ int PGCD(int a, int b){
         return a;
 } 
 
-// ajuster la taille de la fenêtre
+// pour ajuster la taille de la fenetre
+
 void reduce_window_paquet(void){
 
     int pgcd_w = PGCD(windowPaquet,WmaxLose);
@@ -58,7 +66,6 @@ void reduce_window_paquet(void){
         WmaxLose /= pgcd_w;
     } 
 } 
-
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -135,18 +142,30 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr) // appelé par le progra
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
-        // enregistrement adresse distante et on attend pour l'établissement de la connexion
-        sockets[socket].remote_addr = *addr; 
-        while(sockets[socket].state != SYN_RECEIVED);
-        while(sockets[socket].state != ESTABLISHED);
+        sockets[socket].remote_addr = *addr; // faut quand même que l'on sache à qui on envoie la demande de connexion. On ne connaît pas l'adresse distante lors de la creation du socket
 
+        // attente d'établissement de connexion. 
+       
+        pthread_mutex_lock(&mtx);
 
+        while(sockets[socket].state != SYN_RECEIVED){
+
+            pthread_cond_wait(&cond, &mtx);
+        }
+
+        while(sockets[socket].state != ESTABLISHED){
+
+            pthread_cond_wait(&cond, &mtx);
+        }
+
+        pthread_mutex_unlock(&mtx);
         return 0;
+    
     }
     else
         return -1;
 
-    
+
 }
 
 /*
@@ -160,10 +179,9 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
         // loss rate negocier par la source
-
         int loss_rate_req = 20;
 
-        // préparation du SYN
+        // preparation et envoie syn
 
         mic_tcp_pdu pdu_syn;
         pdu_syn.header.syn = 1;
@@ -174,18 +192,17 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
         pdu_syn.payload.size = 3*sizeof(char);
         sprintf(pdu_syn.payload.data,"%d",loss_rate_req);
 
-        // envoie syn avec loss rate on MAJ l'état du socket
-
         IP_send(pdu_syn,addr.ip_addr);
         sockets[socket].state = SYN_SENT;
 
-        //on se met en état wait for syn ack
-        
+        //on se met en état wait 
         mic_tcp_pdu pdu_syn_ack;
         pdu_syn_ack.payload.data = malloc(sizeof(char)*3);
         pdu_syn_ack.payload.size = sizeof(char)*3;
         
+        
         if(IP_recv(&pdu_syn_ack,&sockets[socket].local_addr.ip_addr,&addr.ip_addr,100.0) == -1){
+            sockets[socket].state = IDLE;
             return -1;
         }
 
@@ -193,7 +210,7 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
         if(pdu_syn_ack.header.syn == 1 && pdu_syn_ack.header.ack == 1)
         {
 
-            // si le puits a refuser le loss rate du puits, annulation de la connextion
+            // si le puits a refuser le loss rate source annulation de connexion
 
             if(atoi(pdu_syn_ack.payload.data) != atoi(pdu_syn.payload.data)){
 
@@ -204,7 +221,7 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
             
             WmaxLose = loss_rate_req;
 
-            // envoie ack
+            // preparation ack
                 
             mic_tcp_pdu pdu_ack;
             pdu_ack.header.syn = 0;
@@ -212,31 +229,24 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
             pdu_ack.payload.size = 0;
             pdu_ack.header.dest_port = addr.port;
             IP_send(pdu_ack,addr.ip_addr);
-
             sockets[socket].state = ESTABLISHED;
 
-            // enregistrment adresse distante
-
-            sockets[socket].remote_addr = addr; 
-
-            // reduction taille de la fenetre
-
-            reduce_window_paquet();
+            sockets[socket].remote_addr = addr; // faut quand même que l'on sache à qui on envoie la demande de connexion. On ne connaît pas l'adresse distante lors de la creation du socket
             set_loss_rate(90);
-            
+            // reduction tialle fenetre
+            reduce_window_paquet();
+
             return 0;
 
         }
 
-       else{
+        else{
+            sockets[socket].state = IDLE;
             return -1;
-       }
+        }
 
     } 
 
-    
-    
-    
     else
         return -1;
 }
@@ -252,7 +262,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 
     if(0 <= mic_sock && mic_sock < MAX_SOCKETS_NUMBER){
 
-            
+        // statistique taux de perte
         if(total_sent_paquet != 0)
             printf("Perdu:%d | envoye:%d\nloss rate :%f\n", total_lose_paquet, total_sent_paquet, (float)total_lose_paquet/(float)total_sent_paquet);
 
@@ -263,7 +273,6 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         int nb_retransmit = 0;
         int ack_recv = 0;
         int result;
-
 
         Recv_PDU.payload.size = 0;
 
@@ -278,6 +287,12 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         PDU.header.source_port = sockets[mic_sock].local_addr.port; // port source
         PDU.header.seq_num = n_seq;
 
+        // changement de fenetre
+
+        if(WsentPaquet == 0){
+
+            WlossPaquet = 0;
+        }
 
         while(!ack_recv && nb_retransmit < MAX_RETRY){
 
@@ -289,12 +304,6 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
             
             result = IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, WAIT_TIME);
 
-            // changement fenetre
-
-            if(WsentPaquet == 0){
-
-                WlossPaquet = 0;
-            }
 
             // on vérifie que l'on reçois le bon num d'acquittement et on met ack_recv à true
 
@@ -304,6 +313,8 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 
             // s'il agissait pas d'un ack ou que le num est le mauvais ou que le temps est dépassé, on se prépare à la retransmission
             else{
+
+                // perte admissible
                 if(WlossPaquet < WmaxLose){
                     WlossPaquet++;
                     total_lose_paquet++;
@@ -317,8 +328,10 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
             }
         }
 
-        total_sent_paquet++;
+        // fin d'émission
+
         WsentPaquet = (WsentPaquet+1) % windowPaquet;
+        total_sent_paquet++;
 
         if(ack_recv){
 
@@ -329,6 +342,7 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 
         }
         else{
+
             total_lose_paquet++;
             return -1;
         } 
@@ -404,16 +418,14 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
     pdu_ack.header.ack = 1;
     pdu_ack.header.ack_num = pdu.header.seq_num; // faut le faire avant de vérifier les seq num car soit le msg était un ancien ou l'attendu, il faut ack dans tout les cas
 
-    /*Si on recu bien le pdu attendu on le met dans le buffer et on envoie un ack*/
+    /*Si on recois bien le pdu attendu on le met dans le buffer et on envoie un ack*/
 
     for(int i = 0; i < MAX_SOCKETS_NUMBER; i++){
 
 
         if(sockets[i].local_addr.port == pdu.header.dest_port){
             
-
             // traitement pour connexion établi
-
             if(sockets[i].state == ESTABLISHED){
 
                 if(pdu.header.seq_num == expected_seq)
@@ -425,18 +437,22 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 
             }
 
-            // traitement pour syn reçu
+            //traitement pour syn-ack envoyé
 
             else if(sockets[i].state == SYN_RECEIVED){
 
 
                 if(pdu.header.ack){
+                    pthread_mutex_lock(&mtx);
                     sockets[i].state = ESTABLISHED;
+                    pthread_cond_signal(&cond);
+                    pthread_mutex_unlock(&mtx);
+
                     return;
                 }
             }
 
-            // traitement pour début de connexion, réponse au syn
+            //traitemet pour connexion
 
             else if(sockets[i].state == IDLE){
 
@@ -445,12 +461,12 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
                 int negociated_loss_rate = atoi(pdu.payload.data);
 
                 // loss negocier par le puits
-                int loss_rate_request = 20;
+                int loss_rate_request = 100;
 
                 if(pdu.header.syn && !pdu.header.ack){
 
                     pdu_ack.payload.data = malloc(sizeof(char)*3);
-                    pdu_ack.payload.size = sizeof(char)*3;
+                        pdu_ack.payload.size = sizeof(char)*3;
 
 
                     // si le loss rate de la source est compatible avec celui du puit
@@ -465,7 +481,10 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
                 
 
                     pdu_ack.header.syn = 1;
+                    pthread_mutex_lock(&mtx);
                     sockets[i].state = SYN_RECEIVED;
+                    pthread_cond_signal(&cond);
+                    pthread_mutex_unlock(&mtx);
                 }
             }
 
