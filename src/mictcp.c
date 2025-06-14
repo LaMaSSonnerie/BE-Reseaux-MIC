@@ -1,35 +1,47 @@
 
-/* ----------------------------------------V2--------------------------------------*/
+/* ----------------------------------------V3--------------------------------------*/
 
 #include <mictcp.h>
 #include <api/mictcp_core.h>
 
 #define MAX_SOCKETS_NUMBER 16 
-// nombre maximale de réemission
 #define MAX_RETRY 20
-// temps t'attente maximale entre émission et acquittement
 #define WAIT_TIME 100.0 
 
 
 // au lieu de se contenter de un seul socket, on crée un tableau de socket pour pouvoir en gérer plusieurs
-
 int sock_nb = 0;
 mic_tcp_sock sockets[MAX_SOCKETS_NUMBER];
+
+// variable pour savoir si le tableau a été initialiser sinon on l'initialise lors de la création du premier socket
 int sock_init = 0;
 
 //Pour la reception de pdu, PA et PE
 int expected_seq = 0;
 int n_seq = 0;
+
+
+//pour une fiabilité partielle 
+int windowPaquet = 10;
+int WmaxLose = 2;
+int WsentPaquet = 0;
+int WlossPaquet = 0;
+
+// pour les stats
+int total_sent_paquet = 0;
+int total_lose_paquet = 0;
+
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
  */
+
 int mic_tcp_socket(start_mode sm)
 {
     int result = -1;
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     result = initialize_components(sm); /* Appel obligatoire */
-    set_loss_rate(40);
+    set_loss_rate(0);
 
 
     // initialisation du tableau de socket
@@ -72,7 +84,9 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
 
-    if(0 <= socket && socket < MAX_SOCKETS_NUMBER){  // pareil je suis censé faire cette vérification sur un tableau 
+
+    // on vériifie que le descripteur existe sinon on quitte immédiatement le sous programme et on le fait dans quasiment toutes les fonctions
+    if(0 <= socket && socket < MAX_SOCKETS_NUMBER){ 
 
         sockets[socket].local_addr = addr; // association de l'adresse local et du socket
         return 0;
@@ -86,12 +100,12 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
  * Met le socket en état d'acceptation de connexions
  * Retourne 0 si succès, -1 si erreur
  */
+
 int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr) // appelé par le programme puits
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER){
 
-        // enregistrement adresse distante
         sockets[socket].remote_addr = *addr;
         return 0;
     }
@@ -128,19 +142,23 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr) // appelé  par le progr
 int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
+    set_loss_rate(90);
 
     if(0 <= mic_sock && mic_sock < MAX_SOCKETS_NUMBER){
+
+        // statistique de taux de perte
+        if(total_sent_paquet != 0)
+            printf("Perdu:%d | envoye:%d\nloss rate :%f\n", total_lose_paquet, total_sent_paquet, (float)total_lose_paquet/(float)total_sent_paquet);
 
         mic_tcp_pdu PDU;
         mic_tcp_pdu Recv_PDU;
 
         int bytes_sent = 0;
         int nb_retransmit = 0;
-        //ack reçu ou pas
         int ack_recv = 0;
+        int result;
 
-        int result = -1;
- 
+        
         Recv_PDU.payload.size = 0;
 
 
@@ -155,39 +173,66 @@ int mic_tcp_send(int mic_sock, char* mesg, int mesg_size)
         PDU.header.source_port = sockets[mic_sock].local_addr.port; // port source
         PDU.header.seq_num = n_seq;
 
+        // chagement de fenêtre
+
+        if(WsentPaquet == 0){
+
+            WlossPaquet = 0;
+        }
+
+
         while(!ack_recv && nb_retransmit < MAX_RETRY){
 
             // SEND OR RETRY
-
+            result = -1;
             bytes_sent = IP_send(PDU,sockets[mic_sock].remote_addr.ip_addr);
+            
             // WAIT FOR ACK
-
-            // le Recv_PDU contient l'acquittement 
+            
             result = IP_recv(&Recv_PDU, &sockets[mic_sock].local_addr.ip_addr, &sockets[mic_sock].remote_addr.ip_addr, WAIT_TIME);
+            
 
             // on vérifie que l'on reçois le bon num d'acquittement et on met ack_recv à true
 
+            
             if(result != -1 && Recv_PDU.header.ack && Recv_PDU.header.ack_num == n_seq){
                 ack_recv = 1;
             }
 
-            // s'il agissait pas d'un ack ou que le num est le mauvais, on se prépare à la retransmission
+            // s'il agissait pas d'un ack ou que le num est le mauvais ou que le temps est dépassé, on se prépare à la retransmission
             else{
+
+                // perte admissible
+                if(WlossPaquet < WmaxLose){
+
+                    WlossPaquet++;
+                    total_lose_paquet++;
+                    total_sent_paquet++;
+                    WsentPaquet = (WsentPaquet+1) % windowPaquet;
+                    
+                    return -1;
+                    
+                }
                 nb_retransmit++;
-                result = -1;
             }
         }
+        WsentPaquet = (WsentPaquet+1) % windowPaquet;
+        total_sent_paquet++;
 
-        // aquitté
+        // ack
         if(ack_recv){
 
             // MAJ n_seq
 
             n_seq = (n_seq+1)%2;
+
+            
             return bytes_sent;
 
         }
+        // perte
         else{
+            total_lose_paquet++;
 
             return -1;
         } 
@@ -238,6 +283,7 @@ int mic_tcp_close(int socket)
     if(0 <= socket && socket < MAX_SOCKETS_NUMBER)
 
     {
+        // femeture socket
         sockets[socket].fd = -1;
         sockets[socket].state = IDLE;
         sock_nb--;
@@ -255,16 +301,16 @@ int mic_tcp_close(int socket)
 
 void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_ip_addr remote_addr)
 {
-
+    
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 
     mic_tcp_pdu pdu_ack;
     pdu_ack.header.ack = 1;
+
     // numéro ack
     pdu_ack.header.ack_num = pdu.header.seq_num; 
 
-
-    /*Si on reçoit bien le pdu attendu on le met dans le buffer et on envoie un ack*/
+    /*Si c'est bien le pdu attendu on le met dans le buffer et on envoie un ack*/
     if(pdu.header.seq_num == expected_seq)
     {
         app_buffer_put(pdu.payload);
