@@ -63,4 +63,8 @@ pour la phase d'acceptation de connexion et la mise à jour de l'état du socket
 
 ---------------------------impact de la V4 par rapport à à la V2------------------------
 
+grâce à la V4 , on devrait pouvoir conserver une certaine fluidité dans la lecture de la vidéo par rapport à la V2, car la gestion de la fiabilité total entraîne 
+des coupure à la lecture. une fiabilité partielle est supposé pallier à ce problème.
+
+
 
